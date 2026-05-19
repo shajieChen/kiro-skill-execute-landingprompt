@@ -27,11 +27,13 @@ If the user provides a folder, read that folder's `README.md` and ask which sing
 Given user input `Skill Execute-LandingPrompt + <lp_file_path>`:
 
 ```
-lp_dir       = dirname(lp_file_path)                           # LP 文件所在目录
-readme_path  = lp_dir / README.md                              # README 位置
-source_root  = README.front_matter.source_root                 # 必填，从 README 读取
-scope        = README.front_matter.scope ?? [source_root, dirname(lp_dir)]
-pst_root     = README.front_matter.pst_root ?? dirname(lp_dir)
+lp_dir            = dirname(lp_file_path)                           # LP 文件所在目录
+readme_path       = lp_dir / README.md                              # README 位置
+source_root       = README.front_matter.source_root                 # 必填，从 README 读取
+scope             = README.front_matter.scope ?? [source_root, dirname(lp_dir)]
+pst_root          = README.front_matter.pst_root ?? dirname(lp_dir)
+coding_standards  = README.body["## Coding Standards"]
+                    ?? README.front_matter.coding_standards         # body 优先；都没有则 None
 ```
 
 **If `readme_path` does not exist:** Output error and STOP. Do not execute any LP without a README.
@@ -55,6 +57,11 @@ scope:                             # Optional: allowed file paths for ELP operat
 pst_root: "<absolute path>"        # Optional: PST writeback target directory
                                    # Default = dirname(lp_dir)
                                    # ELP writes to <pst_root>/status/status.yaml
+coding_standards: "<string>"       # Optional: project coding conventions
+                                   # ELP also recognizes a `## Coding Standards`
+                                   # body section (see § Coding Standards Resolution).
+                                   # ELP mirrors this value into meta.coding_standards
+                                   # so PST render can regenerate the README.
 ---
 ```
 
@@ -103,40 +110,134 @@ TelemetryProcessingLayer_Phase -> TPL_SubStep_Framework -> TPL_SubStep_Snapshot
 
 ## § Coding Standards Resolution
 
-ELP does NOT contain any built-in coding standards. Resolution priority:
+ELP does NOT contain any built-in coding standards. Two sources are recognized and reconciled with PST `meta.coding_standards` per PST §7:
 
-1. README.md `## Coding Standards` section → if present, follow those rules
-2. If README has no such section → follow workspace `.kiro/steering/` rules (if any)
-3. If neither exists → follow general best practices
+**Read precedence (what rules to follow during execution):**
+
+1. README.md `## Coding Standards` body section → if present, follow those rules
+2. README.md front-matter `coding_standards:` field → if present (and no body section), follow those rules
+3. PST `meta.coding_standards` (from `<pst_root>/status/status.yaml`) → if neither README source is present, use the meta value
+4. Workspace `.kiro/steering/` rules (if any)
+5. General best practices
+
+**Write-back to meta (Phase B):**
+
+- If README front-matter or body provides any coding_standards content, ELP MUST persist the resolved string into `meta.coding_standards` on both scaffold and direct-write meta refresh.
+- If multiple sources exist, the body section is canonical and is the value written to meta. Front-matter is preserved verbatim by PST render, but meta is the round-trip source of truth.
+- If neither README source has content, omit the `meta.coding_standards` key (do not write empty string).
+
+This closes the loop with PST §7's README generation: PST writes `meta.coding_standards` into the regenerated README, ELP reads README and mirrors back to meta — no field ever gets lost in a round trip.
 
 ---
 
 ## Execution Flow
 
-### Phase A — Execute (Steps 1–8)
+### Phase A — Execute (Steps 1–9)
 
 1. Derive `lp_dir` from LP file path. Read `lp_dir/README.md`.
-   - Parse YAML front-matter → extract `source_root`, `scope`, `pst_root`
+   - Parse YAML front-matter → extract `source_root`, `scope`, `pst_root`, `coding_standards`
    - Validate `source_root`: must not be empty, placeholder, or nonexistent path
-   - Parse body → extract LP sequence, Coding Standards
+   - Parse body → extract LP sequence, Coding Standards (body section wins over front-matter per § Coding Standards Resolution)
    - If README.md missing → error and STOP
    - If source_root invalid → error and STOP
-2. Read the user-specified current LandingPrompt file.
-3. Read prerequisite prompts only when needed for safe execution.
-4. Execute only the current prompt (summarize goal/mode/allowed files/gates first).
-5. Run relevant verification; compare against acceptance criteria.
-6. Mark as `completed` / `partial` / `blocked`.
-7. Read the next prompt (determined from LP sequence) for handoff context — do NOT execute it.
-8. Produce the handoff section (Markdown).
+2. **Dependency Gate** — see § Dependency Gate. Run this **before** reading the current LP file content, **before** opening any prerequisite, and **before** touching any source file. If unsatisfied, STOP and ask the user; do not proceed until the user explicitly chooses an override.
+3. Read the user-specified current LandingPrompt file.
+4. Read prerequisite prompts only when needed for safe execution.
+5. Execute only the current prompt (summarize goal/mode/allowed files/gates first).
+6. Run relevant verification; compare against acceptance criteria.
+7. Mark as `completed` / `partial` / `blocked`.
+8. Read the next prompt (determined from LP sequence) for handoff context — do NOT execute it.
+9. Produce the handoff section (Markdown).
 
-### Phase B — PST 回流 (Steps 9–12)
+### Phase B — PST 回流 (Steps 10–13)
 
-9. Check if `<pst_root>/status/status.yaml` exists. If missing → scaffold (see § PST 回流).
-10. Resolve LP artifact ID (see § ID Resolution).
-11. Write/update: LP artifact entry + handoff_context + change_event.
-12. Set LP artifact status (see § Status Mapping).
+10. Check if `<pst_root>/status/status.yaml` exists. If missing → scaffold (see § PST 回流).
+11. Resolve LP artifact ID (see § ID Resolution).
+12. Write/update: LP artifact entry + handoff_context + change_event.
+13. Set LP artifact status (see § Status Mapping).
 
 Phase B is best-effort. If YAML write fails, report the error in the handoff footer but do NOT alter Phase A results.
+
+---
+
+## § Dependency Gate
+
+Hard precondition check that runs as Phase A Step 2. Do **not** read prerequisite files, do **not** execute, do **not** edit source until this gate has either passed or the user has explicitly chosen an override.
+
+### Step G.1 — Identify prerequisites of the current LP
+
+Collect prerequisites from these sources, in order of authority:
+
+1. **PST `status.yaml`** at `<pst_root>/status/status.yaml` (if it exists). Use these **exact** lookups (PCs and gates are top-level, NOT nested under artifacts):
+   - `artifacts[*] WHERE id == <current LP id>` → `.depends_on`, `.consumes_handoffs`, `.produces_handoffs`
+   - `preconditions[*] WHERE target == <current LP id>` → each `.status` and its `.requires[]` clauses
+   - `gates[*]` whose any `checks[*]` references the current LP, or whose name is associated with the current LP via PST §6C generation rule (one Gate per LP that has PCs) — read `.status` and each `checks[*].status`
+   - `handoff_contexts[*]` where `id ∈ artifacts[current].consumes_handoffs` → `.status`, `.version`, and `.consumed_status[*] WHERE consumer == <current LP id>`
+   - `blockers[*] WHERE <current LP id> ∈ blocks` AND `status == "open"`
+   - Resolve current LP id via § ID Resolution
+2. **Explicit fields inside the current LP file**: lines/sections labeled `Prereq`, `前置`, `Depends on`, `依赖`. Read only the header region of the LP file for this — do not yet read the body.
+3. **README `## LP 序列`**: every token strictly earlier than the current LP token in the parsed flat sequence is an **implicit prerequisite**, with one exception: **phase main files** (filenames matching `*_Phase.md` or LP tokens that contain `_Phase`) do not inherit this implicit chain — they are treated as index/constraint files, not as sequential steps.
+
+Deduplicate prerequisites across sources (PST id wins over file path wins over README token).
+
+### Step G.2 — Resolve each prerequisite's status
+
+For every prerequisite `P`:
+
+| Source | Satisfied iff | Unsatisfied iff |
+|--------|--------------|----------------|
+| PST artifact | `status ∈ { ready, approved, archived }` | `status ∈ { draft, reviewed, needs_update, blocked, invalidated, deprecated }` or artifact missing |
+| PST precondition (top-level, `target == current LP`) | `status == passed` | `status ∈ { failed, pending }` or status missing |
+| PST gate (covers current LP) | `status == passed` AND every `checks[*].status == passed` | any check `failed` or gate `status ∈ { failed, pending }` |
+| Handoff context | `status == available` AND consumer's `consumed_status[*].consumed_version == handoff.version` | `status ∈ { stale, invalidated }` OR consumed_version mismatch OR no `consumed_status` entry for current LP |
+| PST blocker | no open blocker has the current LP in `blocks[]` | any blocker with `status == open` lists the current LP in `blocks[]` |
+| File evidence only | Latest "执行状态" marker in the handoff section equals `completed` | Marker equals `partial` / `blocked`, or marker absent |
+| README implicit | Corresponding PST artifact or file evidence shows satisfied | Otherwise |
+
+A failed `gate` or open `blocker` referencing the current LP is always **unsatisfied**, regardless of artifact status.
+
+> **Note on PST schema:** `preconditions` and `gates` are **top-level arrays** in `status.yaml` (per PST §6G schema), keyed by `target` / `checks[*]` references. They are NOT nested fields of `artifacts[]`. Looking them up under `artifacts[id].preconditions` will always miss.
+
+### Step G.3 — If any prerequisite is unsatisfied → STOP and ask the user
+
+Do not read the current LP body in full, do not read prerequisite files in full, do not run verification commands, do not touch source. Emit exactly one question to the user using this template, then wait for the answer:
+
+```text
+当前目标 Prompt: <current LP file>
+PST 上下文: <pst_root>/status/status.yaml (exists | missing)
+当前 LP artifact id: <resolved id>
+
+检测到前置依赖未满足：
+  - <prereq id or token>: <status / reason / source>
+  - <HC-xxx>: <stale | invalidated | not consumed by current LP, producer=<id>, version=<n>>
+  - <gate id>: failed — <reason>
+  - <blocker id>: open — <title>
+
+请选择：
+  (1) 强制执行当前 Prompt（接受风险：可能猜不存在的锚点、可能产生悬空引用、PST 回流仍会写入但 from 状态可能不准）
+  (2) 改为先执行最近一个未完成前置：<suggested prereq file path>
+  (3) 取消，先人工修复 <root cause>
+  (4) 仅做 verify-only 子集（仅当当前 Prompt 显式声明 verify 模式时可用；ELP 强制 mode=verify-only，不会修改源码）
+```
+
+User responses map as:
+
+| Choice | Skill behavior |
+|--------|----------------|
+| (1) Force execute | Record `dependency_override: forced` in the handoff result; continue with Step 3. **Phase B regardless of Phase A outcome maps the artifact status to `needs_update`** (never `ready`) because PCs are not verified — PST's invariant "ready requires PCs passed" must hold. The `change_events[].summary` MUST include `(forced override, PCs unverified)`. Phase A's true result (completed/partial/blocked) is still recorded in the handoff result block for audit. |
+| (2) Switch target | Abort current invocation. Instruct user to re-invoke ELP with the suggested prereq file. Do not silently switch — ELP is single-target. Emit no Phase B writeback. |
+| (3) Cancel | Abort. Emit only the dependency report (no Phase A execution, no Phase B writeback, no handoff for the current LP). |
+| (4) Verify-only | Continue with Step 3 but force `mode = verify-only` regardless of what the LP declares; never edit source. Phase B writeback still runs and maps result to `needs_update` (verify-only cannot produce `ready`). |
+
+### Step G.4 — If all prerequisites satisfied → proceed
+
+Record the resolved prerequisites and their evidence (PST field path or file:line) in the handoff result under `## 前置依赖检查`. Set `依赖门结果: passed`.
+
+### Interaction with Phase B (PST 回流)
+
+- Phase B always writes the `change_events[].summary` with the dependency-gate outcome appended in parentheses: `passed` / `forced override` / `verify-only override` / `cancelled (no Phase B write)`.
+- When user chose (3) Cancel, Phase B does NOT run.
+- When user chose (1) or (4), Phase B runs normally; the override is captured in `change_events` for audit.
 
 ---
 
@@ -159,10 +260,20 @@ Phase B is best-effort. If YAML write fails, report the error in the handoff foo
 
 - 当前文件:
 - 执行状态: completed / partial / blocked
+- 依赖门结果: passed / forced / verify-only-override / cancelled
 - 已完成:
 - 未完成:
 - 修改文件:
 - 验证结果:
+
+## 前置依赖检查
+
+- 检查来源: status.yaml / LP 文件头 / README LP 序列
+- 当前 LP artifact id:
+- 前置项与状态:
+  - <prereq id or token>: satisfied | unsatisfied (reason) | overridden
+  - <HC-xxx>: available v<n> | stale | invalidated
+- 用户选择: (1) 强制 / (2) 改目标 / (3) 取消 / (4) verify-only / N/A（全部满足）
 
 ## confirmed
 
@@ -188,11 +299,15 @@ Phase B is best-effort. If YAML write fails, report the error in the handoff foo
 
 ### LP Artifact ID
 
-Resolution order (first match wins):
+Resolution order (first match wins). Algorithm aligned with PST §6A, with PST-registered ID checked first so existing artifacts are never re-keyed:
 
-1. **PST-registered ID**: If `status/status.yaml` already contains an artifact whose `path` matches the LP file → use that artifact's `id`.
-2. **Filename pattern**: If filename matches `LP-\d{3}-*.md` → extract `LP-001` etc.
-3. **Fallback slug**: `LP.<stem>` (filename without `.md`).
+1. **PST-registered ID**: If `<pst_root>/status/status.yaml` already contains an artifact whose `path` matches the LP file → use that artifact's `id` (highest precedence; protects against ID drift on re-execution).
+2. **Filename pattern**: If filename matches `LP-\d{3}-*.md` → extract `LP-001`, `LP-002`, etc.
+3. **YAML front-matter `id:` field**: If the LP file's YAML front-matter contains an `id:` field with a string value → use that value verbatim.
+4. **H1 prefix**: If the LP file's first H1 line matches `# (LP-\d{3})[:\s].*` → extract the captured `LP-NNN` token.
+5. **Fallback slug**: `LP.<stem>` (filename without `.md`, no further normalization).
+
+If resolution steps 2–5 disagree (e.g., filename says `LP-001` but H1 says `LP-007`), pick the **earliest** match in the order above and emit a warning in the handoff result under `## 前置依赖检查` so the user can reconcile. Do not silently prefer one source over another beyond the documented order.
 
 ### LP Path in status.yaml
 
@@ -207,17 +322,38 @@ The `external:` prefix tells PST dirty_check to skip this artifact during file-b
 
 ## § Status Mapping
 
-| ELP Result | PST status | Semantics |
-|----------|-----------|------|
-| completed | `ready` | LP executed successfully, outputs available for downstream |
-| partial | `needs_update` | LP partially completed, needs re-execution |
-| blocked | `blocked` | LP blocked, needs external resolution |
+| ELP Result | Dependency Gate outcome | PST status | Semantics |
+|------------|-------------------------|------------|----------|
+| completed | passed | `ready` | LP executed successfully with verified preconditions; outputs available for downstream |
+| completed | forced override | `needs_update` | LP body finished but preconditions unverified — must NOT promote to `ready` (PST invariant) |
+| completed | verify-only override | `needs_update` | Verify-only by definition cannot mark `ready` |
+| partial | any | `needs_update` | LP partially completed, needs re-execution |
+| blocked | any | `blocked` | LP blocked, needs external resolution |
 
-**Valid re-execution transitions:**
+**Valid re-execution transitions (must match PST §1 ELP accommodations exactly):**
+
 - `ready → ready` (re-executed, still completed — HC version bumps if content changed)
-- `ready → needs_update` / `ready → blocked`
-- `needs_update → ready` / `needs_update → needs_update`
-- `blocked → ready` / `blocked → needs_update`
+- `ready → needs_update`
+- `ready → blocked`
+- `needs_update → ready`
+- `blocked → ready`
+
+**Disallowed transitions — ELP MUST NOT write these to `transitions[]`:**
+- `needs_update → needs_update`
+- `blocked → needs_update`
+- `needs_update → blocked`
+- Any transition into `draft`, `reviewed`, `approved`, `invalidated`, `deprecated`, `archived`
+
+**"Wanted but forbidden" fallback matrix.** When Phase A's raw mapping (per the Status Mapping table) would produce a forbidden transition given the current PST status, ELP MUST fall back as follows. In every fallback case, the artifact `status` is **retained unchanged** and the `transitions[]` array is **left empty** for that artifact; the execution is still recorded as a `change_event` (audit log) with the situation noted in `summary`.
+
+| Phase A raw mapping | Current PST status | Direct write legal? | ELP fallback |
+|---|---|---|---|
+| `needs_update` (partial / forced / verify-only) | `needs_update` | ❌ | No transition row; `change_event.summary` notes "status unchanged (PST whitelist: needs_update→needs_update forbidden)" |
+| `needs_update` (partial / forced / verify-only) | `blocked` | ❌ | No transition row; status retained as `blocked`; summary notes "ELP attempted needs_update mapping but PST whitelist forbids blocked→needs_update; user action required to unblock" |
+| `blocked` (Phase A blocked) | `needs_update` | ❌ (`needs_update→blocked` not whitelisted) | No transition row; status retained as `needs_update`; summary notes blocker reason; handoff footer prompts "to formally mark blocked, run PST manual flow needs_update→reviewed→…→blocked, or let PST AUDIT set blocked via propagate" |
+| Any other combination | — | ✅ (in whitelist) | Write transition normally |
+
+**Rationale:** `apply_changes.py` does NOT validate state-machine legality (verified by audit). ELP is contractually responsible for emitting only whitelisted transitions. The fallback rule above preserves audit completeness without violating the PST §1 invariant.
 
 ---
 
@@ -286,7 +422,6 @@ Or for updating an existing HC (version bump):
 ```json
 {
   "op": "handoff_version",
-  "artifact": "HC-<existing>",
   "handoff_id": "HC-<existing>",
   "version": "<new version number>",
   "to": "available",
@@ -294,6 +429,8 @@ Or for updating an existing HC (version bump):
   "source": "Execute-LandingPrompt"
 }
 ```
+
+> Note: `apply_changes.py` accepts either `handoff_id` (preferred) or `artifact` for backward compatibility. New ELP writes MUST use `handoff_id` only.
 
 After writing the JSON, invoke: `python tools/apply_changes.py --project <pst_root>`
 
@@ -331,6 +468,7 @@ meta:
   scope:                                   # omit if README had no scope
     - "<resolved scope entry>"
   pst_root: "<resolved pst_root>"
+  coding_standards: "<resolved coding_standards>"   # omit if README had no body section AND no front-matter field
   summary:
     artifacts_total: 1
     artifacts_ready: 0
@@ -442,6 +580,7 @@ change_events:
 | README `source_root` | `meta.source_root` | Persist on scaffold AND direct-write (omit key if README value is placeholder/invalid) |
 | README `scope` | `meta.scope` | Persist on scaffold AND direct-write (omit if README had none) |
 | README `pst_root` | `meta.pst_root` | Persist on scaffold AND direct-write (omit if README had none) |
+| README `coding_standards` (front-matter or `## Coding Standards` body section) | `meta.coding_standards` | Persist on scaffold AND direct-write (omit if both sources empty). Body section wins over front-matter when both exist. |
 
 **Facts/Constraints format:** Each fact and constraint MUST be a structured object, not a plain string:
 
@@ -486,6 +625,7 @@ meta:
   scope:
     - "<from README front-matter>"
   pst_root: "<from README front-matter>"
+  coding_standards: "<from README body section preferred, else front-matter; omit if both absent>"
   summary:
     artifacts_total: <recount>
     artifacts_ready: <recount>
@@ -537,6 +677,11 @@ If Phase B fails at any step (YAML parse error, file write failure, etc.):
 
 - README.md was read and front-matter parsed successfully.
 - source_root path exists, is accessible, and is not a placeholder value.
+- **Dependency Gate (§ Dependency Gate) ran as Phase A Step 2, before any prerequisite or source file was opened.**
+- **If any prerequisite was unsatisfied, the user was asked and explicitly chose one of (1)–(4); no silent continuation.**
+- **Handoff result includes `依赖门结果` field and a `## 前置依赖检查` block listing every resolved prerequisite.**
+- **If `dependency_override: forced` was recorded, `change_events[].summary` includes `(forced override)` and the report explicitly lists which anchors were assumed rather than verified.**
+- **If user chose (3) Cancel, Phase B did NOT run.**
 - Current prompt was read and only it was executed.
 - Next prompt was read but not executed; handoff section exists.
 - All code modifications are within declared scope.
@@ -549,5 +694,6 @@ If Phase B fails at any step (YAML parse error, file write failure, etc.):
 - Phase B: HC version only bumped if facts/constraints actually changed.
 - Phase B: When using apply_changes.py path, every transition includes `"source": "Execute-LandingPrompt"`.
 - Phase B: When using direct-write, meta block is refreshed after write.
-- Phase B: `meta.source_root` / `meta.scope` / `meta.pst_root` mirror README front-matter so a later PST AUDIT can regenerate the landing README without losing ELP configuration.
+- Phase B: `meta.source_root` / `meta.scope` / `meta.pst_root` / `meta.coding_standards` mirror README (front-matter or body section as applicable) so a later PST AUDIT can regenerate the landing README without losing ELP configuration.
+- Phase B: Forced-override executions map to `needs_update` regardless of Phase A success (PST's "ready requires PCs passed" invariant must not be violated).
 - Phase B 回流完成或失败已报告.
