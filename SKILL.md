@@ -78,55 +78,37 @@ Remaining body content is free-form for human readers.
 
 ### LP 序列解析算法
 
-ELP 按以下规则从 `## LP 序列` section 确定"下一个 prompt"：
+ELP 从 `## LP 序列` section 确定"下一个 prompt"：
 
-1. **分割**：按 `->` 分割整个 section 内容（跨行），trim 每个元素得到 token 列表。
-2. **匹配当前 LP**：将当前 LP 的 artifact ID（按 § ID Resolution 解析）和文件名 stem 与 token 列表逐一比较（大小写不敏感）。匹配规则：
-   - token == artifact ID（如 `LP-001`）
-   - token == 文件名 stem（如 `CL_SubStep_Verify`）
-   - token 是 artifact ID 的子串或文件名 stem 的子串
-3. **取后继**：匹配到的 token 的下一个 token 即为"下一个 prompt"。
-4. **映射回文件**：在 `lp_dir` 中查找文件名包含该 token 的 `.md` 文件。如果有多个匹配，优先选择以 `LP-\d{3}-` 开头且 ID 匹配的文件。
-5. **末尾处理**：如果当前 LP 是序列中最后一个 token，则无下一个 prompt（handoff 中标注"序列已完成"）。
+1. **分割**：按 `->` 分割整个 section 内容（跨行 flatten 成一个 token 列表），trim 每个元素。
+2. **匹配当前 LP**：将当前 LP 的 artifact ID（§ ID Resolution）和文件名 stem 与 token 列表比较（大小写不敏感），匹配规则任一即可：token == artifact ID / token == 文件名 stem / token 是其中之一的子串。
+3. **取后继**：匹配 token 的下一个 token 即为"下一个 prompt"。
+4. **映射回文件**：在 `lp_dir` 中查找文件名包含该 token 的 `.md`。多匹配时优先 `LP-\d{3}-` 前缀且 ID 匹配。
+5. **末尾**：当前 LP 是序列最后一个 token → 无下一个 prompt（handoff 标注"序列已完成"）。
 
-**示例**：
+**示例（单行）**：`LP-001-init -> LP-002-core -> LP-003-verify` — 当前执行 LP-001 → 查找 `LP-002-core*.md`。
+
+**多行格式**：所有行 `->` 链合并为扁平列表，解析逻辑不变。例：
 ```
-## LP 序列
-
-LP-001-init -> LP-002-core -> LP-003-verify
-```
-当前执行 `LP-001-init.md`，匹配 token `LP-001-init`，下一个 token 为 `LP-002-core`，在 lp_dir 中查找 `LP-002-core*.md`。
-
-多行格式同样支持：
-```
-## LP 序列
-
 CollectionLayer_Phase -> CL_SubStep_Verify -> CL_SubStep_Structures
 TelemetryProcessingLayer_Phase -> TPL_SubStep_Framework -> TPL_SubStep_Snapshot
 ```
-所有行的 token 合并为一个扁平列表（按出现顺序），解析逻辑不变。
 
 ---
 
 ## § Coding Standards Resolution
 
-ELP does NOT contain any built-in coding standards. Two sources are recognized and reconciled with PST `meta.coding_standards` per PST §7:
+ELP has no built-in coding standards. Reconciled with PST `meta.coding_standards` per PST §7.
 
-**Read precedence (what rules to follow during execution):**
+| Read precedence (during execution) | Write-back to `meta.coding_standards` (Phase B) |
+|---|---|
+| 1. README body `## Coding Standards` | Canonical write target — body section wins if both sources exist |
+| 2. README front-matter `coding_standards:` | Preserved verbatim by PST render, but meta is sourced from body when body exists |
+| 3. PST `meta.coding_standards` | (fallback for read; no write-back needed) |
+| 4. Workspace `.kiro/steering/` | — |
+| 5. General best practices | — |
 
-1. README.md `## Coding Standards` body section → if present, follow those rules
-2. README.md front-matter `coding_standards:` field → if present (and no body section), follow those rules
-3. PST `meta.coding_standards` (from `<pst_root>/status/status.yaml`) → if neither README source is present, use the meta value
-4. Workspace `.kiro/steering/` rules (if any)
-5. General best practices
-
-**Write-back to meta (Phase B):**
-
-- If README front-matter or body provides any coding_standards content, ELP MUST persist the resolved string into `meta.coding_standards` on both scaffold and direct-write meta refresh.
-- If multiple sources exist, the body section is canonical and is the value written to meta. Front-matter is preserved verbatim by PST render, but meta is the round-trip source of truth.
-- If neither README source has content, omit the `meta.coding_standards` key (do not write empty string).
-
-This closes the loop with PST §7's README generation: PST writes `meta.coding_standards` into the regenerated README, ELP reads README and mirrors back to meta — no field ever gets lost in a round trip.
+If neither README source has content, omit `meta.coding_standards` (do not write empty string).
 
 ---
 
@@ -187,9 +169,9 @@ For every prerequisite `P`:
 | Source | Satisfied iff | Unsatisfied iff |
 |--------|--------------|----------------|
 | PST artifact | `status ∈ { ready, approved, archived }` | `status ∈ { draft, reviewed, needs_update, blocked, invalidated, deprecated }` or artifact missing |
-| PST precondition (top-level, `target == current LP`) | `status == passed` | `status ∈ { failed, pending }` or status missing |
-| PST gate (covers current LP) | `status == passed` AND every `checks[*].status == passed` | any check `failed` or gate `status ∈ { failed, pending }` |
-| Handoff context | `status == available` AND consumer's `consumed_status[*].consumed_version == handoff.version` | `status ∈ { stale, invalidated }` OR consumed_version mismatch OR no `consumed_status` entry for current LP |
+| PST precondition (top-level, `target == current LP`) | `status == passing` | `status ∈ { failed, pending }` or status missing |
+| PST gate (covers current LP) | `status == passing` AND every `checks[*].status == passing` | any check `failed` or gate `status ∈ { failed, pending }` |
+| Handoff context | `status ∈ { available, consumed }` AND consumer's `consumed_status[*].consumed_version == handoff.version` | any other `status` (e.g. `draft`, `partially_consumed`, `stale`, `invalidated`, `deprecated`, `archived`) OR `consumed_version` mismatch OR no `consumed_status` entry for current LP |
 | PST blocker | no open blocker has the current LP in `blocks[]` | any blocker with `status == open` lists the current LP in `blocks[]` |
 | File evidence only | Latest "执行状态" marker in the handoff section equals `completed` | Marker equals `partial` / `blocked`, or marker absent |
 | README implicit | Corresponding PST artifact or file evidence shows satisfied | Otherwise |
@@ -233,11 +215,9 @@ User responses map as:
 
 Record the resolved prerequisites and their evidence (PST field path or file:line) in the handoff result under `## 前置依赖检查`. Set `依赖门结果: passed`.
 
-### Interaction with Phase B (PST 回流)
+### Interaction with Phase B
 
-- Phase B always writes the `change_events[].summary` with the dependency-gate outcome appended in parentheses: `passed` / `forced override` / `verify-only override` / `cancelled (no Phase B write)`.
-- When user chose (3) Cancel, Phase B does NOT run.
-- When user chose (1) or (4), Phase B runs normally; the override is captured in `change_events` for audit.
+`change_events[].summary` always appends the gate outcome in parens: `passed` / `forced override` / `verify-only override` / `cancelled (no Phase B write)`. Choice (3) skips Phase B; (1)/(4) run Phase B normally with the override captured in `change_events`.
 
 ---
 
@@ -299,15 +279,12 @@ Record the resolved prerequisites and their evidence (PST field path or file:lin
 
 ### LP Artifact ID
 
-Resolution order (first match wins). Algorithm aligned with PST §6A, with PST-registered ID checked first so existing artifacts are never re-keyed:
+Algorithm per PST §6A, with one ELP-specific precedence override:
 
-1. **PST-registered ID**: If `<pst_root>/status/status.yaml` already contains an artifact whose `path` matches the LP file → use that artifact's `id` (highest precedence; protects against ID drift on re-execution).
-2. **Filename pattern**: If filename matches `LP-\d{3}-*.md` → extract `LP-001`, `LP-002`, etc.
-3. **YAML front-matter `id:` field**: If the LP file's YAML front-matter contains an `id:` field with a string value → use that value verbatim.
-4. **H1 prefix**: If the LP file's first H1 line matches `# (LP-\d{3})[:\s].*` → extract the captured `LP-NNN` token.
-5. **Fallback slug**: `LP.<stem>` (filename without `.md`, no further normalization).
+0. **PST-registered ID** (ELP-only, highest): if `<pst_root>/status/status.yaml` has an artifact whose `path` matches the LP file → reuse that `id` (protects against re-keying on re-execution).
+1.–4. **Then fall back to PST §6A order**: filename `LP-\d{3}-*` → YAML front-matter `id:` → H1 `# LP-NNN:` → slug `LP.<stem>`.
 
-If resolution steps 2–5 disagree (e.g., filename says `LP-001` but H1 says `LP-007`), pick the **earliest** match in the order above and emit a warning in the handoff result under `## 前置依赖检查` so the user can reconcile. Do not silently prefer one source over another beyond the documented order.
+If steps 1–4 disagree (e.g., filename `LP-001` vs H1 `LP-007`), pick the earliest match and emit a warning under `## 前置依赖检查`. Do not silently prefer one source.
 
 ### LP Path in status.yaml
 
@@ -322,38 +299,26 @@ The `external:` prefix tells PST dirty_check to skip this artifact during file-b
 
 ## § Status Mapping
 
-| ELP Result | Dependency Gate outcome | PST status | Semantics |
-|------------|-------------------------|------------|----------|
-| completed | passed | `ready` | LP executed successfully with verified preconditions; outputs available for downstream |
-| completed | forced override | `needs_update` | LP body finished but preconditions unverified — must NOT promote to `ready` (PST invariant) |
-| completed | verify-only override | `needs_update` | Verify-only by definition cannot mark `ready` |
-| partial | any | `needs_update` | LP partially completed, needs re-execution |
-| blocked | any | `blocked` | LP blocked, needs external resolution |
+Raw Phase A → PST status mapping. **Whitelisted transitions** (per PST §1 ELP privilege): `ready→ready`, `ready→needs_update`, `ready→blocked`, `needs_update→ready`, `blocked→ready`. Any other target/path is forbidden.
 
-**Valid re-execution transitions (must match PST §1 ELP accommodations exactly):**
+| ELP Result | Dependency Gate | Mapped PST status | Notes |
+|------------|-----------------|-------------------|-------|
+| completed | passed | `ready` | Outputs available; HC version bumps if facts/constraints content changed |
+| completed | forced override | `needs_update` | PST invariant: ready requires PCs passed |
+| completed | verify-only override | `needs_update` | Verify-only cannot mark ready |
+| partial | any | `needs_update` | Re-execution needed |
+| blocked | any | `blocked` | External resolution needed |
 
-- `ready → ready` (re-executed, still completed — HC version bumps if content changed)
-- `ready → needs_update`
-- `ready → blocked`
-- `needs_update → ready`
-- `blocked → ready`
+**Fallback when raw mapping violates whitelist** (`apply_changes.py` does NOT validate this — ELP enforces):
 
-**Disallowed transitions — ELP MUST NOT write these to `transitions[]`:**
-- `needs_update → needs_update`
-- `blocked → needs_update`
-- `needs_update → blocked`
-- Any transition into `draft`, `reviewed`, `approved`, `invalidated`, `deprecated`, `archived`
+Retain current status unchanged, emit NO `transitions[]` row, but still append a `change_event` (audit log) with `summary` noting the forbidden combination. Common cases:
 
-**"Wanted but forbidden" fallback matrix.** When Phase A's raw mapping (per the Status Mapping table) would produce a forbidden transition given the current PST status, ELP MUST fall back as follows. In every fallback case, the artifact `status` is **retained unchanged** and the `transitions[]` array is **left empty** for that artifact; the execution is still recorded as a `change_event` (audit log) with the situation noted in `summary`.
-
-| Phase A raw mapping | Current PST status | Direct write legal? | ELP fallback |
-|---|---|---|---|
-| `needs_update` (partial / forced / verify-only) | `needs_update` | ❌ | No transition row; `change_event.summary` notes "status unchanged (PST whitelist: needs_update→needs_update forbidden)" |
-| `needs_update` (partial / forced / verify-only) | `blocked` | ❌ | No transition row; status retained as `blocked`; summary notes "ELP attempted needs_update mapping but PST whitelist forbids blocked→needs_update; user action required to unblock" |
-| `blocked` (Phase A blocked) | `needs_update` | ❌ (`needs_update→blocked` not whitelisted) | No transition row; status retained as `needs_update`; summary notes blocker reason; handoff footer prompts "to formally mark blocked, run PST manual flow needs_update→reviewed→…→blocked, or let PST AUDIT set blocked via propagate" |
-| Any other combination | — | ✅ (in whitelist) | Write transition normally |
-
-**Rationale:** `apply_changes.py` does NOT validate state-machine legality (verified by audit). ELP is contractually responsible for emitting only whitelisted transitions. The fallback rule above preserves audit completeness without violating the PST §1 invariant.
+| Mapped want | Current status | Action |
+|---|---|---|
+| `needs_update` | `needs_update` | No transition; summary: "status unchanged (whitelist forbids needs_update→needs_update)" |
+| `needs_update` | `blocked` | No transition; summary: "ELP attempted needs_update but whitelist forbids blocked→needs_update; user action required to unblock" |
+| `blocked` | `needs_update` | No transition; summary notes blocker reason; handoff footer prompts "to formally mark blocked, run PST manual flow or let AUDIT propagate" |
+| Any whitelisted combination | — | Write transition normally |
 
 ---
 
@@ -451,119 +416,20 @@ If `<pst_root>/status/status.yaml` does not exist, create minimal structure:
 
 **Post-scaffold note:** After ELP scaffolds a minimal status.yaml, the user should run PST INIT (`Skill project-state-tracker + init`) to generate `tools/` and `views/` directories. Until then, ELP will use direct-write mode for subsequent executions.
 
-Minimal status.yaml:
+Minimal status.yaml — populate per PST §6G schema, with these scaffold-specific values:
 
-```yaml
-meta:
-  project_name: "<pst_root folder name>"
-  schema_version: 1
-  created: "<ISO timestamp>"
-  last_updated: "<ISO timestamp>"
-  last_run: "<ISO timestamp>"
-  # ELP MUST persist the resolved README front-matter values into meta so a
-  # subsequent PST AUDIT can regenerate the landing README without losing
-  # ELP-required configuration. If a value is absent in README, omit the key
-  # (do NOT write the "<未配置>" placeholder into meta).
-  source_root: "<resolved source_root>"
-  scope:                                   # omit if README had no scope
-    - "<resolved scope entry>"
-  pst_root: "<resolved pst_root>"
-  coding_standards: "<resolved coding_standards>"   # omit if README had no body section AND no front-matter field
-  summary:
-    artifacts_total: 1
-    artifacts_ready: 0
-    artifacts_blocked: 0
-    artifacts_needs_update: 0
-    blockers_open: 0
-    gates_failed: 0
-    handoffs_total: 1
-    handoffs_stale: 0
-    handoffs_invalidated: 0
-    handoffs_pending_consumers: 1
-  hotspots: []
-  pointers:
-    entry_point: "AGENTS.md"
-    views_dir: "views/"
-    status_report: "views/status_report.md"
-    handoff_view: "views/handoff_view.md"
-    prompt_chain: "views/prompt_chain_view.md"
-
-project:
-  name: "<pst_root folder name>"
-  phase: "execution"
-  version: "1.0"
-
-artifacts:
-- id: <resolved per § ID Resolution>
-  type: landing_prompt
-  path: <resolved per § ID Resolution path rules>
-  status: <ready|needs_update|blocked>
-  depends_on: []
-  produces_handoffs: [HC-001]
-  consumes_handoffs: []
-  last_checked: "<ISO timestamp>"
-
-research_findings: []
-evidence: []
-assumptions: []
-decisions: []
-dependencies: []
-
-rules:
-  research_is_fact_only: true
-  status_is_single_source_of_truth: true
-  landing_requires_test_ready: true
-  plan_invalidates_landing: true
-  landing_invalidates_test: true
-
-handoff_contexts:
-- id: HC-001
-  title: "<LP title or filename>"
-  producer: <artifact id>
-  producer_type: landing_prompt
-  produced_from: []
-  version: 1
-  status: available
-  results: []
-  invalidated_by: []
-  facts:
-  - id: "F-001"
-    statement: "<confirmed item 1>"
-    source: "<lp_file_path>"
-    confidence: "high"
-  constraints:
-  - id: "C-001"
-    statement: "<unresolved item 1>"
-    source: "<lp_file_path>"
-  consumed_by: [<next LP id>]
-  consumed_status:
-  - consumer: <next LP id>
-    status: "pending"
-    consumed_version: null
-    consumed_at: null
-  last_verified: "<ISO timestamp>"
-
-blockers: []
-gates: []
-preconditions: []
-
-snapshots:
-  git_baseline: null
-  file_hashes: {}
-
-change_events:
-- id: CE-001
-  time: "<ISO>"
-  source: Execute-LandingPrompt
-  event_type: scaffold_and_execute
-  summary: "ELP scaffold + first execution: <one-line summary>"
-  affected: [<artifact id>]
-  transitions:
-  - artifact: <artifact id>
-    from: null
-    to: <ready|needs_update|blocked>
-    reason: "ELP execution: <one-line summary>"
-```
+- `meta.project_name` / `project.name` = pst_root folder name
+- `meta.schema_version` = 1, `project.phase` = "execution", `project.version` = "1.0"
+- `meta.{created,last_updated,last_run}` = current ISO timestamp
+- `meta.{source_root,scope,pst_root,coding_standards}` = resolved README values (omit any key whose source is absent or a placeholder — do NOT write `"<未配置>"` into meta)
+- `meta.summary` = recounted values (typically `artifacts_total: 1`, `handoffs_total: 1`, `handoffs_pending_consumers: 1`, others 0)
+- `meta.pointers` = standard defaults (`entry_point: "AGENTS.md"`, `views_dir: "views/"`, `status_report: "views/status_report.md"`, `handoff_view: "views/handoff_view.md"`, `prompt_chain: "views/prompt_chain_view.md"`)
+- `artifacts`: single record for the current LP — `{id: <resolved>, type: landing_prompt, path: <resolved>, status: <ready|needs_update|blocked>, depends_on: [], produces_handoffs: [HC-001], consumes_handoffs: [], last_checked: <ISO>}`
+- `rules` = all five flags `true` (research_is_fact_only, status_is_single_source_of_truth, landing_requires_test_ready, plan_invalidates_landing, landing_invalidates_test)
+- `handoff_contexts`: single `HC-001` for the current LP per § Data Mapping (structured facts/constraints, `status: available`, `version: 1`, `consumed_by: [<next LP id>]`, `consumed_status: [{consumer: <next LP id>, status: pending, consumed_version: null, consumed_at: null}]`)
+- `snapshots`: `{enabled: true, git_baseline: null, file_hashes: {}}`
+- `change_events`: single `CE-001` with `source: Execute-LandingPrompt`, `event_type: scaffold_and_execute`, one transition `{from: null, to: <ready|needs_update|blocked>}`
+- Empty arrays for: `research_findings`, `evidence`, `assumptions`, `decisions`, `dependencies`, `blockers`, `gates`, `preconditions`
 
 ### Data Mapping
 
@@ -664,6 +530,24 @@ This ensures PST's AGENTS.md and views reflect current state even before a full 
     reason: "ELP: <one-line summary>"
 ```
 
+### § Sequential ID Generation (direct-write path)
+
+When ELP writes status.yaml directly (no apply_changes.py), it MUST generate the next sequential id for `CE-`, `F-`, `C-`, and `HC-` prefixed entries using this algorithm:
+
+```
+next_id(existing_ids, prefix) =
+  let used = { int(x[len(prefix):]) for x in existing_ids if x.startswith(prefix) and x[len(prefix):].isdigit() }
+  let n = 1
+  while n in used: n += 1
+  return prefix + zero_pad(n, 3)         # e.g. "CE-007"
+```
+
+- `CE-NNN`: scan `change_events[*].id` across the entire file
+- `HC-NNN`: scan `handoff_contexts[*].id` across the entire file
+- `F-NNN` / `C-NNN`: scan `facts[*].id` / `constraints[*].id` **within the target HC only** (per-HC namespace, not global)
+
+This matches `apply_changes.py`'s `next_id` helper, so direct-write and tool-path writes are interchangeable across runs and produce contiguous, non-colliding ids regardless of which path was used to author preceding entries.
+
 ### Error Handling
 
 If Phase B fails at any step (YAML parse error, file write failure, etc.):
@@ -675,25 +559,13 @@ If Phase B fails at any step (YAML parse error, file write failure, etc.):
 
 ## Safety Checks (before final response)
 
-- README.md was read and front-matter parsed successfully.
-- source_root path exists, is accessible, and is not a placeholder value.
-- **Dependency Gate (§ Dependency Gate) ran as Phase A Step 2, before any prerequisite or source file was opened.**
-- **If any prerequisite was unsatisfied, the user was asked and explicitly chose one of (1)–(4); no silent continuation.**
-- **Handoff result includes `依赖门结果` field and a `## 前置依赖检查` block listing every resolved prerequisite.**
-- **If `dependency_override: forced` was recorded, `change_events[].summary` includes `(forced override)` and the report explicitly lists which anchors were assumed rather than verified.**
-- **If user chose (3) Cancel, Phase B did NOT run.**
-- Current prompt was read and only it was executed.
-- Next prompt was read but not executed; handoff section exists.
-- All code modifications are within declared scope.
-- Code follows Coding Standards declared in README (or steering fallback).
-- No forbidden scope modified; no unresolved reported as confirmed.
-- Phase B: artifact ID resolved correctly (PST-registered > filename pattern > fallback).
-- Phase B: status mapping uses `ready`/`needs_update`/`blocked` (never `archived`).
-- Phase B: write method matches pst_root state (apply_changes.py if exists, else direct).
-- Phase B: HC facts/constraints use structured format `{id, statement, source, confidence}`.
-- Phase B: HC version only bumped if facts/constraints actually changed.
-- Phase B: When using apply_changes.py path, every transition includes `"source": "Execute-LandingPrompt"`.
-- Phase B: When using direct-write, meta block is refreshed after write.
-- Phase B: `meta.source_root` / `meta.scope` / `meta.pst_root` / `meta.coding_standards` mirror README (front-matter or body section as applicable) so a later PST AUDIT can regenerate the landing README without losing ELP configuration.
-- Phase B: Forced-override executions map to `needs_update` regardless of Phase A success (PST's "ready requires PCs passed" invariant must not be violated).
+Only items not already enforced by inline `MUST` / `MUST NOT` clauses in the body. Body rules win on conflict.
+
+- README.md read; front-matter parsed; `source_root` exists & is not a placeholder.
+- Dependency Gate ran **as Phase A Step 2**, before any prerequisite or source file was opened.
+- If any prerequisite unsatisfied, user explicitly chose (1)–(4); no silent continuation.
+- Current prompt was the only one executed; next prompt was read but NOT executed.
+- All edits within declared `scope`; no `禁止修改` regions touched; no anchors guessed.
+- Phase B write method matches pst_root state (`apply_changes.py` if exists, else direct-write).
+- Phase B: every transition object includes `"source": "Execute-LandingPrompt"` (the single critical flag — see § approved_transitions.json Format).
 - Phase B 回流完成或失败已报告.
