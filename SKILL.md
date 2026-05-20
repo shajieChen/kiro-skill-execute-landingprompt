@@ -119,7 +119,7 @@ If neither README source has content, omit `meta.coding_standards` (do not write
 
 ## Execution Flow
 
-### Phase A — Execute (Steps 1–9)
+### Phase A — Execute (Steps 1–9.5)
 
 1. Derive `lp_dir` from LP file path. Read `lp_dir/README.md`.
    - **Read cache**: compute sha256 of README.md; if `<pst_root>/status/.cache/readme_parse.json` exists and its stored hash matches, reuse the cached `{source_root, scope, pst_root, coding_standards, lp_sequence, lp_sequence_source}` tuple and skip re-parsing. Otherwise parse and overwrite the cache entry.
@@ -137,6 +137,11 @@ If neither README source has content, omit `meta.coding_standards` (do not write
 7. Mark as `completed` / `partial` / `blocked`.
 8. Read the next prompt (determined from LP sequence) for handoff context — do NOT execute it.
 9. Produce the handoff section (Markdown).
+9.5. **Result 持久化** — Write the complete Handoff Markdown to `<pst_root>/Result/<artifact-id>-<YYYYMMDD-HHmmss>.md`.
+     - Create `<pst_root>/Result/` if it does not exist.
+     - Content = everything from `## 当前 Prompt 执行结果` through `## 给下一个 Prompt 的交接` (inclusive).
+     - Timestamp uses local time, format `YYYYMMDD-HHmmss` (no colons — Windows-safe).
+     - Write failure → append `⚠️ Result 写入失败: <error>` to Handoff footer. Do NOT block Phase B or alter Phase A status.
 
 ### Phase B — PST 回流 (Steps 10–13)
 
@@ -202,6 +207,7 @@ The fast path is intentionally strict: any ambiguity, missing field, or borderli
 - 未完成:
 - 修改文件:
 - 验证结果:
+- Result 文件: <pst_root>/Result/<artifact-id>-<YYYYMMDD-HHmmss>.md
 
 ## 前置依赖检查
 

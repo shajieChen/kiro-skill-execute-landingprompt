@@ -101,6 +101,7 @@ If `<pst_root>/status/status.yaml` does not exist, create minimal structure:
 ├── prompts/
 │   ├── landing/
 │   └── test/
+├── Result/
 └── (views/ and tools/ are NOT created — PST INIT handles those)
 ```
 
