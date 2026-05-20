@@ -7,6 +7,7 @@ Kiro Agent Skill — 执行单个 LandingPrompt 文件并自动回流结果到 `
 - 读取 LandingPrompt 目录 README.md 获取项目上下文（source_root、coding standards、LP 序列）
 - 按步骤执行指定 LandingPrompt 中的实施任务
 - 执行完成后自动同步状态到 `status/status.yaml`
+- **Result 持久化** — Handoff Markdown 自动归档至 `pst_root/Result/`，保留完整执行历史
 - 项目无关设计，支持任意 PST 管理的项目
 
 ## 调用方式
