@@ -172,7 +172,9 @@ view C:\Users\chenshajie\.kiro\skills\Execute-LandingPrompt\dependency_gate.md
    - `artifacts[*] WHERE id == <current LP id>` exists AND its `depends_on[]` entries are all `status ∈ {ready, approved, archived}`, AND
    - `preconditions[*] WHERE target == <current LP id>` is either empty OR every row has `status == passing`, AND
    - `gates[*]` covering the current LP (per §6C generation rule) is either absent OR `status == passing` with all `checks[*].status == passing`, AND
-   - every HC in `artifacts[current].consumes_handoffs[]` has `status ∈ {available, consumed}` AND its `consumed_status[*] WHERE consumer == <current LP id>` row (if any) has `consumed_version == handoff.version`, AND
+   - every HC in `artifacts[current].consumes_handoffs[]` has `status ∈ {available, consumed}` AND either:
+     - no `consumed_status[*] WHERE consumer == <current LP id>` row exists (first consumption, acceptable), OR
+     - the row has `consumed_version == handoff.version` OR `consumed_version == null` (pending first consumption), AND
    - no `blockers[*] WHERE status == "open" AND <current LP id> ∈ blocks`.
 
    → gate auto-passes; record evidence inline as `依赖门结果: passed (fast path: all PCs/HCs/gates green, no open blockers)` and skip the companion load.

@@ -83,7 +83,7 @@ Or for updating an existing HC (version bump — MUST carry the new content; bum
 }
 ```
 
-**Required:** `facts[]` and `constraints[]` MUST be present in every `handoff_version` op and MUST reflect the post-execution state in full (replacement semantics, not diff). `apply_changes.py` replaces the HC's facts/constraints arrays with the supplied content and only then increments `version`. A `handoff_version` op missing these arrays is rejected by ELP's pre-write self-check (do not emit the JSON).
+**Required:** `facts[]` and `constraints[]` MUST be present in every `handoff_version` op and MUST reflect the post-execution state in full (replacement semantics, not diff). `apply_changes.py` replaces the HC's facts/constraints arrays with the supplied content and only then increments `version`. A `handoff_version` op missing these arrays is rejected by ELP's pre-write self-check (do not emit the JSON). Empty arrays (`facts: []`, `constraints: []`) satisfy the presence requirement — only a completely absent key is rejected.
 
 > **Op key convention:** New ELP writes MUST use `handoff_id`. `apply_changes.py` still accepts the legacy `artifact:` key for backward compatibility, but ELP MUST NOT emit it.
 
