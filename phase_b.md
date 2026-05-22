@@ -231,7 +231,7 @@ This ensures PST's AGENTS.md and views reflect current state even before a full 
 
 ### § Sequential ID Generation (direct-write path)
 
-When ELP writes status.yaml directly (no apply_changes.py), it MUST generate the next sequential id for `CE-`, `F-`, `C-`, and `HC-` prefixed entries using this algorithm:
+When ELP writes status.yaml directly (no apply_changes.py), it MUST generate the next sequential id for `CE-`, `F-`, `C-`, and `HC-` prefixed entries using this algorithm (mirrors `_yaml_compat.next_id()` in PST tools):
 
 ```
 next_id(existing_ids, prefix) =
