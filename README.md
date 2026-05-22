@@ -1,3 +1,7 @@
+---
+agent_load: false
+---
+
 # Execute-LandingPrompt
 
 Kiro Agent Skill — 执行单个 LandingPrompt 文件并自动回流结果到 `status.yaml`（PST 回流）。
