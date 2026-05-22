@@ -31,7 +31,7 @@ For every prerequisite `P`:
 | PST artifact | `status ∈ { ready, approved, archived }` | `status ∈ { draft, reviewed, needs_update, blocked, invalidated, deprecated }` or artifact missing |
 | PST precondition (top-level, `target == current LP`) | `status == passing` | `status ∈ { failed, pending }` or status missing |
 | PST gate (covers current LP) | `status == passing` AND every `checks[*].status == passing` | any check `failed` or gate `status ∈ { failed, pending }` |
-| Handoff context | `status ∈ { available, consumed }` AND consumer's `consumed_status[*].consumed_version == handoff.version` | any other `status` (e.g. `draft`, `partially_consumed`, `stale`, `invalidated`, `deprecated`, `archived`) OR `consumed_version` mismatch OR no `consumed_status` entry for current LP |
+| Handoff context | `status ∈ { available, consumed }` AND consumer's `consumed_status[*] WHERE consumer == <current LP id>` satisfies ONE of: (a) row does not exist (first consumption, acceptable), OR (b) `consumed_version == handoff.version` (up to date), OR (c) `consumed_version == null` AND `status == "pending"` (awaiting first consumption) | any other combination: handoff `status ∉ {available, consumed}`, OR consumer row exists with `status ∈ {stale, rejected}`, OR `consumed_version` is a non-null integer that differs from `handoff.version` |
 | PST blocker | no open blocker has the current LP in `blocks[]` | any blocker with `status == open` lists the current LP in `blocks[]` |
 | File evidence only | Latest "执行状态" marker in the handoff section equals `completed` | Marker equals `partial` / `blocked`, or marker absent |
 | README implicit | Corresponding PST artifact or file evidence shows satisfied | Otherwise |
