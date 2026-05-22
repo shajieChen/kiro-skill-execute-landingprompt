@@ -99,6 +99,38 @@ CollectionLayer_Phase -> CL_SubStep_Verify -> CL_SubStep_Structures
 TelemetryProcessingLayer_Phase -> TPL_SubStep_Framework -> TPL_SubStep_Snapshot
 ```
 
+### 分段模式（Group-segmented LP 序列）
+
+当 `## LP 序列` section 包含 `### <group-name>` 子标题时，ELP 进入分段模式：
+
+1. **检测**：扫描 `## LP 序列` section 内容，如果存在任何 `### ` 开头的行 → 分段模式。否则 → 扁平模式（现有逻辑不变）。
+2. **分段**：按 `### ` 标题分割为多个独立链。每个 `### <group>` 下的 `->` 链是一条独立序列。
+3. **归属判定**：
+   - 从 status.yaml 读取当前 LP 的 `group` 字段
+   - 在 `## LP 序列` 中找到 `### <group>` 段
+   - 在该段内执行现有的 token 匹配 + 后继查找逻辑
+4. **Fallback**：如果当前 LP 没有 `group` 字段，或其 group 在序列中没有对应段 → 在所有段中搜索（等效于扁平模式）。
+
+**示例（分段格式）：**
+```
+## LP 序列
+
+### dark-mode
+LP-002-theme-infra -> LP-003-toggle-ui
+
+### network-refactor
+LP-004-net-buffer -> LP-005-net-verify
+```
+
+当前执行 LP-002（group=dark-mode）→ 只在 `### dark-mode` 段内查找 → 后继为 LP-003-toggle-ui。
+
+### Group field inference (Phase B)
+
+When writing/updating the LP artifact in status.yaml:
+- If the artifact already has a `group` field → preserve it unchanged.
+- If the artifact has no `group` field AND the LP 序列 is in segmented format → infer group from the `### <group>` heading that contains the current LP token. Write `group: <inferred>` to the artifact.
+- If neither condition applies → do not write a group field (existing behavior).
+
 ---
 
 ## § Coding Standards Resolution
@@ -187,6 +219,7 @@ The fast path is intentionally strict: any ambiguity, missing field, or borderli
 
 ## Constraints
 
+- **Archived group rejection**: If the current LP's `group` field matches a group in `groups[]` with `status == "archived"`, ELP MUST refuse to execute. Output: "此 LP 属于已归档的 group '<name>'。如需执行请先运行 `reactivate <name>`。" Then STOP (no Phase A, no Phase B).
 - **Single Prompt Rule**: Do not execute sibling prompts, do not widen scope, do not start the next prompt. If blocked, hand off the blocker.
 - **Verify-only prompts**: Do not modify source files.
 - **Missing anchors**: Stop and report, do not guess nonexistent functions/paths.
